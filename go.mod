@@ -1,3 +1,5 @@
-module example.com
+module fitness.com
 
 go 1.26.5
+
+require golang.org/x/time v0.15.0 // indirect

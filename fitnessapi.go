@@ -8,7 +8,9 @@ import (
 	"os"
 	"strconv"
 
-	"example.com/exercisestore"
+	"fitness.com/exercisestore"
+	"fitness.com/middleware"
+	"golang.org/x/time/rate"
 )
 
 type exerciseServer struct {
@@ -134,12 +136,18 @@ func (es *exerciseServer) deleteAllExercisesHandler(w http.ResponseWriter, req *
 func main() {
 	mux := http.NewServeMux()
 	server := NewExerciseServer()
+	limiter := rate.NewLimiter(1, 1)
+
 	mux.HandleFunc("POST /exercise/", server.createExerciseHandler)
 	mux.HandleFunc("GET /exercise/", server.getAllExercisesHandler)
 	mux.HandleFunc("GET /exercise/{id}/", server.getExerciseHandler)
 	mux.HandleFunc("DELETE /exercise/{id}/", server.deleteExerciseByIDHandler)
 	mux.HandleFunc("DELETE /exercise/", server.deleteAllExercisesHandler) // does changing the order of this affect the routing?
 
-	log.Fatal(http.ListenAndServe("localhost:"+os.Getenv("SERVERPORT"), mux))
+	handler := middleware.RateLimit(limiter)(mux)
+	handler = middleware.Recovery(handler)
+	handler = middleware.Logging(handler)
+
+	log.Fatal(http.ListenAndServe("localhost:"+os.Getenv("SERVERPORT"), handler))
 
 }
