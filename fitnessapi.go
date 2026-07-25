@@ -10,6 +10,8 @@ import (
 	"os"
 	"strconv"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"fitness.com/exercisestore"
 	"fitness.com/middleware"
 	"golang.org/x/time/rate"
@@ -18,6 +20,8 @@ import (
 type exerciseServer struct {
 	store *exercisestore.ExerciseStore
 }
+
+var pws = make(map[string][]byte)
 
 func NewExerciseServer() *exerciseServer {
 	store := exercisestore.New()
@@ -38,6 +42,12 @@ func jsonEncoder(w http.ResponseWriter, v any, code int) {
 
 func (es *exerciseServer) createExerciseHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("handling create exercise at %s\n", req.URL.Path)
+
+	user, pass, ok := req.BasicAuth()
+	if !ok || !verifyUserPass(user, pass) {
+		w.Header().Set("WWW-Authenticate", `Basic Realm="api"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	}
 
 	type RequestExercise struct {
 		Name   string   `json:"name"`
@@ -133,6 +143,20 @@ func (es *exerciseServer) deleteAllExercisesHandler(w http.ResponseWriter, req *
 	}
 
 	jsonEncoder(w, res, http.StatusOK)
+}
+
+// checks user name and password matches
+func verifyUserPass(user string, pw string) bool {
+	wantPw, hasUser := pws[user]
+	if !hasUser {
+		return false
+	}
+	if hashErr := bcrypt.CompareHashAndPassword(wantPw, []byte(pw)); hashErr == nil {
+		return true
+	} else {
+		log.Printf("Error while authenticating: %v", hashErr)
+		return false
+	}
 }
 
 func main() {
