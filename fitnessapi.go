@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"flag"
 	"log"
 	"mime"
 	"net/http"
@@ -134,6 +136,10 @@ func (es *exerciseServer) deleteAllExercisesHandler(w http.ResponseWriter, req *
 }
 
 func main() {
+	certFile := flag.String("cert", "cert.pem", "TLS cert PEM file")
+	keyFile := flag.String("key", "key.pem", "TLS key PEM file")
+	flag.Parse()
+
 	mux := http.NewServeMux()
 	server := NewExerciseServer()
 	limiter := rate.NewLimiter(1, 1)
@@ -148,6 +154,14 @@ func main() {
 	handler = middleware.Recovery(handler)
 	handler = middleware.Logging(handler)
 
-	log.Fatal(http.ListenAndServe("localhost:"+os.Getenv("SERVERPORT"), handler))
+	addr := "localhost:" + os.Getenv("SERVERPORT")
+	srv := http.Server{
+		Addr:    addr,
+		Handler: handler,
+		TLSConfig: &tls.Config{
+			MinVersion: tls.VersionTLS13,
+		},
+	}
+	log.Fatal(srv.ListenAndServeTLS(*certFile, *keyFile))
 
 }
