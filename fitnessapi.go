@@ -9,23 +9,28 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"fitness.com/authstore"
 	"fitness.com/exercisestore"
 	"fitness.com/middleware"
 	"golang.org/x/time/rate"
 )
 
-type exerciseServer struct {
-	store *exercisestore.ExerciseStore
+type apiServer struct {
+	exerciseStore *exercisestore.ExerciseStore
+	authStore     *authstore.AuthStore
 }
 
 var pws = make(map[string][]byte)
 
-func NewExerciseServer() *exerciseServer {
-	store := exercisestore.New()
-	return &exerciseServer{store: store}
+func NewAPIServer() *apiServer {
+	exerciseStore := exercisestore.New()
+	authStore := authstore.New()
+	return &apiServer{exerciseStore: exerciseStore, authStore: authStore}
 }
 
 func jsonEncoder(w http.ResponseWriter, v any, code int) {
@@ -40,7 +45,7 @@ func jsonEncoder(w http.ResponseWriter, v any, code int) {
 	w.Write(js)
 }
 
-func (es *exerciseServer) createExerciseHandler(w http.ResponseWriter, req *http.Request) {
+func (as *apiServer) createExerciseHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("handling create exercise at %s\n", req.URL.Path)
 
 	user, pass, ok := req.BasicAuth()
@@ -81,11 +86,11 @@ func (es *exerciseServer) createExerciseHandler(w http.ResponseWriter, req *http
 		return
 	}
 
-	id := es.store.CreateExercise(re.Name, re.Sets, re.Reps, re.Weight, re.Tags)
+	id := as.exerciseStore.CreateExercise(re.Name, re.Sets, re.Reps, re.Weight, re.Tags)
 	jsonEncoder(w, ResponseID{ID: id}, http.StatusCreated)
 }
 
-func (es *exerciseServer) getExerciseHandler(w http.ResponseWriter, req *http.Request) {
+func (as *apiServer) getExerciseHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("handing get exercise at %s\n", req.URL.Path)
 
 	id, err := strconv.Atoi(req.PathValue("id"))
@@ -94,7 +99,7 @@ func (es *exerciseServer) getExerciseHandler(w http.ResponseWriter, req *http.Re
 		return
 	}
 
-	exercise, err := es.store.GetExerciseByID(id)
+	exercise, err := as.exerciseStore.GetExerciseByID(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -103,15 +108,15 @@ func (es *exerciseServer) getExerciseHandler(w http.ResponseWriter, req *http.Re
 	jsonEncoder(w, exercise, http.StatusOK)
 }
 
-func (es *exerciseServer) getAllExercisesHandler(w http.ResponseWriter, req *http.Request) {
+func (as *apiServer) getAllExercisesHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("handling get all exercises at %s\n", req.URL.Path)
 
-	exercises := es.store.GetAllExercises()
+	exercises := as.exerciseStore.GetAllExercises()
 
 	jsonEncoder(w, exercises, http.StatusOK)
 }
 
-func (es *exerciseServer) deleteExerciseByIDHandler(w http.ResponseWriter, req *http.Request) {
+func (as *apiServer) deleteExerciseByIDHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("handling delete exercise at %s\n", req.URL.Path)
 
 	id, err := strconv.Atoi(req.PathValue("id"))
@@ -120,7 +125,7 @@ func (es *exerciseServer) deleteExerciseByIDHandler(w http.ResponseWriter, req *
 		return
 	}
 
-	err = es.store.DeleteExercise(id)
+	err = as.exerciseStore.DeleteExercise(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -129,20 +134,110 @@ func (es *exerciseServer) deleteExerciseByIDHandler(w http.ResponseWriter, req *
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (es *exerciseServer) deleteAllExercisesHandler(w http.ResponseWriter, req *http.Request) {
+func (as *apiServer) deleteAllExercisesHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("handling delete all exerices at %s\n", req.URL.Path)
 
 	type DeleteAllResponse struct {
 		Deleted int `json:"deleted"`
 	}
 
-	deleted := es.store.DeleteAllExercises()
+	deleted := as.exerciseStore.DeleteAllExercises()
 
 	res := DeleteAllResponse{
 		Deleted: deleted,
 	}
 
 	jsonEncoder(w, res, http.StatusOK)
+}
+
+func (as *apiServer) loginHandler(w http.ResponseWriter, req *http.Request) {
+	type RequestLogin struct {
+		User string `json:"user"`
+		Pw   string `json:"pw"`
+	}
+
+	type Response struct {
+		Token   string    `json:"token"`
+		Expires time.Time `json:"expires"`
+	}
+
+	content := req.Header.Get("Content-Type")
+	media, _, err := mime.ParseMediaType(content)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if media != "application/json" {
+		http.Error(w, "expected application/json Content-Type", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	dec := json.NewDecoder(req.Body)
+	dec.DisallowUnknownFields()
+
+	var re RequestLogin
+	if err := dec.Decode(&re); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	session, token, err := as.authStore.LoginUser(re.User, re.Pw)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonEncoder(w, Response{token, session.ExpiresAt}, http.StatusOK)
+}
+
+func (as *apiServer) registerHandler(w http.ResponseWriter, req *http.Request) {
+	type RequestRegister struct {
+		User string `json:"user"`
+		Pw   string `json:"pw"`
+	}
+
+	content := req.Header.Get("Content-Type")
+	media, _, err := mime.ParseMediaType(content)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if media != "application/json" {
+		http.Error(w, "expected application/json Content-Type", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	dec := json.NewDecoder(req.Body)
+	dec.DisallowUnknownFields()
+
+	var re RequestRegister
+	if err := dec.Decode(&re); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	token, err := as.authStore.RegisterUser(re.User, re.Pw)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonEncoder(w, token, http.StatusCreated)
+}
+
+func (as *apiServer) deleteSessionHandler(w http.ResponseWriter, req *http.Request) {
+	authorization := req.Header.Get("Authorization")
+	scheme, token, ok := strings.Cut(authorization, " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		http.Error(w, "invalid authorization format!", http.StatusUnauthorized)
+		return
+	}
+
+	err := as.authStore.DeleteSession(token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // checks user name and password matches
@@ -164,24 +259,39 @@ func main() {
 	keyFile := flag.String("key", "key.pem", "TLS key PEM file")
 	flag.Parse()
 
+	rootMux := http.NewServeMux()
+
 	mux := http.NewServeMux()
-	server := NewExerciseServer()
+
+	// seperate mux for authenticated requests
+	authMux := http.NewServeMux()
+	server := NewAPIServer()
 	limiter := rate.NewLimiter(1, 1)
 
-	mux.HandleFunc("POST /exercise/", server.createExerciseHandler)
-	mux.HandleFunc("GET /exercise/", server.getAllExercisesHandler)
-	mux.HandleFunc("GET /exercise/{id}/", server.getExerciseHandler)
-	mux.HandleFunc("DELETE /exercise/{id}/", server.deleteExerciseByIDHandler)
-	mux.HandleFunc("DELETE /exercise/", server.deleteAllExercisesHandler) // does changing the order of this affect the routing?
+	authMux.HandleFunc("POST /exercise/", server.createExerciseHandler)
+	authMux.HandleFunc("GET /exercise/", server.getAllExercisesHandler)
+	authMux.HandleFunc("GET /exercise/{id}/", server.getExerciseHandler)
+	authMux.HandleFunc("DELETE /exercise/{id}/", server.deleteExerciseByIDHandler)
+	authMux.HandleFunc("DELETE /exercise/", server.deleteAllExercisesHandler)
+	authMux.HandleFunc("DELETE /auth/", server.deleteSessionHandler)
+	mux.HandleFunc("POST /auth/login/", server.loginHandler)
+	mux.HandleFunc("POST /auth/register/", server.registerHandler)
 
 	handler := middleware.RateLimit(limiter)(mux)
 	handler = middleware.Recovery(handler)
-	handler = middleware.Logging(handler)
 
+	authHandler := middleware.RateLimit(limiter)(authMux)
+	authHandler = middleware.Recovery(authHandler)
+
+	rootMux.Handle("DELETE /auth/", authMux)
+	rootMux.Handle("/auth/", mux)
+	rootMux.Handle("/exercise/", authMux)
+
+	rootHandler := middleware.Logging(rootMux)
 	addr := "localhost:" + os.Getenv("SERVERPORT")
 	srv := http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: rootHandler,
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13,
 		},

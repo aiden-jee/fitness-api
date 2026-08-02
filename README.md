@@ -6,7 +6,7 @@ A simple API to track gym workouts, built with Go's standard library. Developed 
 - Structured request logging
 - Rate limiting middleware
 - HTTPS support using self signed TLS certificate
-- Authentication 
+- Token Based Authentication
 - Panic recovery 
 
 ## Setup
@@ -32,3 +32,8 @@ curl --cacert cert.pem \
 
 ## Project Notes
 This project is used as a learning tool for backend development in Go. No AI was used in the development of this API to maximize learning opportunity. 
+
+## Future Features
+- Relate exercise store items to specific users. Add authentication logic based on user ownership over exercise entries.
+- Create admin authentication to lock specific endpoints behind admin privelages. 
+- Design and add pagination and scalability features
