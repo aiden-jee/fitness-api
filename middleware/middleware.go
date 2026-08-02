@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -34,7 +36,7 @@ func Recovery(next http.Handler) http.Handler {
 
 // Rate limiting middleware
 // - Limits the number of requests per minute to certain requests per minute
-func RateLimit(limiter *rate.Limiter) func(next http.Handler) http.Handler {
+func RateLimit(limiter *rate.Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			if limiter.Allow() != true {
@@ -42,6 +44,26 @@ func RateLimit(limiter *rate.Limiter) func(next http.Handler) http.Handler {
 				// log.Println(string(debug.Stack()))
 			}
 			next.ServeHTTP(w, req)
+		})
+	}
+}
+
+// Authentication middleware
+func Authenticate(validate func(token string) error) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			authorization := req.Header.Get("Authorization")
+			scheme, token, ok := strings.Cut(authorization, " ")
+			if !ok || !strings.EqualFold(scheme, "Bearer") {
+				http.Error(w, "invalid authorization format!", http.StatusUnauthorized)
+				return
+			}
+			if err := validate(token); err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			ctx := context.WithValue(req.Context(), "auth-token", token)
+			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	}
 }

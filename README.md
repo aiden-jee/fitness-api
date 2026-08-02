@@ -35,5 +35,6 @@ This project is used as a learning tool for backend development in Go. No AI was
 
 ## Future Features
 - Relate exercise store items to specific users. Add authentication logic based on user ownership over exercise entries.
+- Add expiration token logic and www-authenticate headers.
 - Create admin authentication to lock specific endpoints behind admin privelages. 
 - Design and add pagination and scalability features

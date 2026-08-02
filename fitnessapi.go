@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"mime"
 	"net/http"
@@ -11,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 
 	"fitness.com/authstore"
 	"fitness.com/exercisestore"
@@ -25,7 +26,7 @@ type apiServer struct {
 	authStore     *authstore.AuthStore
 }
 
-var pws = make(map[string][]byte)
+/*************** Helper Functions ***************/
 
 func NewAPIServer() *apiServer {
 	exerciseStore := exercisestore.New()
@@ -45,14 +46,21 @@ func jsonEncoder(w http.ResponseWriter, v any, code int) {
 	w.Write(js)
 }
 
+func (as *apiServer) validateToken(token string) error {
+	decodedTokenBytes, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return err
+	}
+	tokenHash := sha256.Sum256(decodedTokenBytes)
+	if _, ok := as.authStore.Sessions[tokenHash]; !ok {
+		return fmt.Errorf("Session not found!")
+	}
+	return nil
+}
+
+/*************** Handlers ***************/
 func (as *apiServer) createExerciseHandler(w http.ResponseWriter, req *http.Request) {
 	log.Printf("handling create exercise at %s\n", req.URL.Path)
-
-	user, pass, ok := req.BasicAuth()
-	if !ok || !verifyUserPass(user, pass) {
-		w.Header().Set("WWW-Authenticate", `Basic Realm="api"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-	}
 
 	type RequestExercise struct {
 		Name   string   `json:"name"`
@@ -240,20 +248,6 @@ func (as *apiServer) deleteSessionHandler(w http.ResponseWriter, req *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// checks user name and password matches
-func verifyUserPass(user string, pw string) bool {
-	wantPw, hasUser := pws[user]
-	if !hasUser {
-		return false
-	}
-	if hashErr := bcrypt.CompareHashAndPassword(wantPw, []byte(pw)); hashErr == nil {
-		return true
-	} else {
-		log.Printf("Error while authenticating: %v", hashErr)
-		return false
-	}
-}
-
 func main() {
 	certFile := flag.String("cert", "cert.pem", "TLS cert PEM file")
 	keyFile := flag.String("key", "key.pem", "TLS key PEM file")
@@ -280,12 +274,13 @@ func main() {
 	handler := middleware.RateLimit(limiter)(mux)
 	handler = middleware.Recovery(handler)
 
-	authHandler := middleware.RateLimit(limiter)(authMux)
+	authHandler := middleware.Authenticate(server.validateToken)(authMux)
+	authHandler = middleware.RateLimit(limiter)(authHandler)
 	authHandler = middleware.Recovery(authHandler)
 
-	rootMux.Handle("DELETE /auth/", authMux)
-	rootMux.Handle("/auth/", mux)
-	rootMux.Handle("/exercise/", authMux)
+	rootMux.Handle("DELETE /auth/", authHandler)
+	rootMux.Handle("/auth/", handler)
+	rootMux.Handle("/exercise/", authHandler)
 
 	rootHandler := middleware.Logging(rootMux)
 	addr := "localhost:" + os.Getenv("SERVERPORT")

@@ -63,7 +63,7 @@ func GenerateToken() (token string, hashToken [TOKEN_BYTES]byte) {
 func HashToken(token string) ([TOKEN_BYTES]byte, error) {
 	decodedTokenBytes, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
-		return [TOKEN_BYTES]byte{}, fmt.Errorf(err.Error())
+		return [TOKEN_BYTES]byte{}, err
 	}
 	tokenHash := sha256.Sum256(decodedTokenBytes)
 	return tokenHash, nil
